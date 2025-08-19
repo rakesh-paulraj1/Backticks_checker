@@ -43,41 +43,97 @@ export default function Home() {
   const needsParsing = (text: string): boolean => {
     if (!text) return false;
     
-    // Check if special characters are already properly wrapped in backticks
-    const alreadyFormattedRegex = /`[^`]*[<>{}[\]()\/][^`]*`/;
-    if (alreadyFormattedRegex.test(text)) {
-      // Check if there are any unformatted special characters outside of backticks
-      const textWithoutBackticks = text.replace(/`[^`]*`/g, '');
-      const specialCharRegex = /[<>{}[\]()\/]/;
-      return specialCharRegex.test(textWithoutBackticks);
-    }
+    // Simple check for special characters that aren't already in backticks
+    const specialChars = /[<>{}[\]()]/;
     
-    // If no backticks found, check for special characters
-    const specialCharRegex = /[<>{}[\]()\/]/;
-    return specialCharRegex.test(text);
+    // If no special characters at all, no parsing needed
+    if (!specialChars.test(text)) return false;
+    
+    // Check if ALL special characters are already wrapped in backticks
+    let tempText = text;
+    // Remove all content within backticks
+    tempText = tempText.replace(/`[^`]*`/g, '');
+    
+    // If special characters remain after removing backticked content, parsing is needed
+    return specialChars.test(tempText);
   };
 
   // Function to wrap special characters with backticks
-  const formatSpecialCharacters = (text: string): string => {
-    if (!text) return text;
+
+// Simple and robust formatting function - no nested backticks
+const formatSpecialCharacters = (text: string): string => {
+  if (!text) return text;
+  
+  // Manual approach to avoid regex lookbehind issues
+  let result = '';
+  let i = 0;
+  let insideBackticks = false;
+  
+  while (i < text.length) {
+    const char = text[i];
     
-    // Regular expression to find content within special characters
-    const patterns = [
-      /(\<[^>]*\>)/g,  // <content>
-      /(\{[^}]*\})/g,  // {content}
-      /(\[[^\]]*\])/g, // [content]
-      /(\([^)]*\))/g,  // (content)
-      /(\/[^\/\s]*\/)/g, // /content/ (paths or regex-like)
-      /(\b\w*\/\w*\b)/g, // word/word patterns
-    ];
+    // Track if we're inside backticks
+    if (char === '`') {
+      insideBackticks = !insideBackticks;
+      result += char;
+      i++;
+      continue;
+    }
     
-    let formattedText = text;
-    patterns.forEach(pattern => {
-      formattedText = formattedText.replace(pattern, '`$1`');
-    });
+    // If we're inside backticks, just copy everything as-is
+    if (insideBackticks) {
+      result += char;
+      i++;
+      continue;
+    }
     
-    return formattedText;
-  };
+    // Check for special characters that need wrapping (only when NOT inside backticks)
+    const specialPairs = {
+      '{': '}',
+      '<': '>',
+      '[': ']',
+      '(': ')'
+    };
+    
+    if (specialPairs[char as keyof typeof specialPairs]) {
+      const openChar = char;
+      const closeChar = specialPairs[openChar as keyof typeof specialPairs];
+      const start = i;
+      i++; // move past opening character
+      
+      // Find matching closing character
+      let depth = 1;
+      let foundBacktick = false;
+      
+      while (i < text.length && depth > 0) {
+        if (text[i] === '`') {
+          foundBacktick = true;
+          break;
+        }
+        if (text[i] === openChar) depth++;
+        else if (text[i] === closeChar) depth--;
+        i++;
+      }
+      
+      if (depth === 0 && !foundBacktick) {
+        // Found complete pair with no backticks inside, wrap it
+        const content = text.substring(start, i);
+        result += `\`${content}\``;
+      } else {
+        // Either no matching close found or contains backticks, treat as regular character
+        result += openChar;
+        i = start + 1;
+      }
+      continue;
+    }
+    
+    // Regular character, just copy it
+    result += char;
+    i++;
+  }
+  
+  return result;
+};
 
   // Step 1: parse raw text
   const parseExcelData = (data: string): ParsedData | null => {
@@ -134,10 +190,7 @@ export default function Home() {
   const handleCopyParsed = () => {
     if (mcqData.length === 0) return;
     
-    // Create header row
-    const headers = EXPECTED_HEADERS.join("\t");
-    
-    // Create data rows from parsed MCQ data
+    // Create data rows from parsed MCQ data (without headers)
     const dataRows = mcqData.map(mcq => [
       mcq.question,
       mcq.optionA,
@@ -152,9 +205,8 @@ export default function Home() {
       mcq.positiveMarks
     ].join("\t"));
     
-    // Combine headers and data
-    const fullText = [headers, ...dataRows].join("\n");
-    navigator.clipboard.writeText(fullText);
+    const dataText = dataRows.join("\n");
+    navigator.clipboard.writeText(dataText);
   };
 
   return (
@@ -202,7 +254,7 @@ export default function Home() {
 
         {/* Raw Preview Table */}
         {parsedData && !mcqData.length && (
-          <div className="bg-white rounded-lg shadow-md p-6 mb-8">
+          <div className="bg-white rounded-lg shadow-md p-6 mb-20">
             <h2 className="text-xl font-semibold mb-4">Preview Data</h2>
 
              <div className="mt-4 text-sm text-gray-600">
@@ -267,7 +319,7 @@ export default function Home() {
           </div>
         )}
 
-        {/* Parsed MCQ Cards */}
+        {/* Parsed MCQ Table */}
         {mcqData.length > 0 && (
           <div className="bg-white rounded-lg shadow-md p-6">
             <div className="flex justify-between items-center mb-6">
@@ -280,58 +332,100 @@ export default function Home() {
               </button>
             </div>
             
-            <div className="space-y-6">
-              {mcqData.map((mcq, index) => (
-                <div key={index} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
-                  <div className="flex justify-between items-start mb-3">
-                    <h3 className="text-lg font-medium text-gray-900">Question {index + 1}</h3>
-                    <div className="flex gap-2 text-xs">
-                      <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded">{mcq.difficulty}</span>
-                      <span className="px-2 py-1 bg-green-100 text-green-800 rounded">{mcq.positiveMarks} marks</span>
-                    </div>
-                  </div>
-                  
-                  <div className="mb-4">
-                    <p className="text-gray-900 font-medium" dangerouslySetInnerHTML={{ __html: mcq.question.replace(/`([^`]+)`/g, '<code class="bg-gray-100 px-1 py-0.5 rounded text-sm">$1</code>') }} />
-                  </div>
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-                    <div className="p-3 bg-gray-50 rounded">
-                      <span className="font-medium text-gray-700">A) </span>
-                      <span dangerouslySetInnerHTML={{ __html: mcq.optionA.replace(/`([^`]+)`/g, '<code class="bg-gray-100 px-1 py-0.5 rounded text-sm">$1</code>') }} />
-                    </div>
-                    <div className="p-3 bg-gray-50 rounded">
-                      <span className="font-medium text-gray-700">B) </span>
-                      <span dangerouslySetInnerHTML={{ __html: mcq.optionB.replace(/`([^`]+)`/g, '<code class="bg-gray-100 px-1 py-0.5 rounded text-sm">$1</code>') }} />
-                    </div>
-                    <div className="p-3 bg-gray-50 rounded">
-                      <span className="font-medium text-gray-700">C) </span>
-                      <span dangerouslySetInnerHTML={{ __html: mcq.optionC.replace(/`([^`]+)`/g, '<code class="bg-gray-100 px-1 py-0.5 rounded text-sm">$1</code>') }} />
-                    </div>
-                    <div className="p-3 bg-gray-50 rounded">
-                      <span className="font-medium text-gray-700">D) </span>
-                      <span dangerouslySetInnerHTML={{ __html: mcq.optionD.replace(/`([^`]+)`/g, '<code class="bg-gray-100 px-1 py-0.5 rounded text-sm">$1</code>') }} />
-                    </div>
-                  </div>
-                  
-                  <div className="bg-green-50 border border-green-200 rounded p-3 mb-3">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-green-800 font-medium">✓ Correct Answer:</span>
-                      <span className="font-semibold text-green-900" dangerouslySetInnerHTML={{ __html: mcq.correctAnswer.replace(/`([^`]+)`/g, '<code class="bg-green-100 px-1 py-0.5 rounded text-xs">$1</code>') }} />
-                    </div>
-                    {mcq.rationale && (
-                      <p className="text-green-800 text-sm" dangerouslySetInnerHTML={{ __html: mcq.rationale.replace(/`([^`]+)`/g, '<code class="bg-green-100 px-1 py-0.5 rounded text-xs">$1</code>') }} />
-                    )}
-                  </div>
-                  
-                  {(mcq.tags || mcq.slug) && (
-                    <div className="flex flex-wrap gap-2 text-xs text-gray-600">
-                      {mcq.slug && <span className="px-2 py-1 bg-gray-100 rounded">Slug: {mcq.slug}</span>}
-                      {mcq.tags && <span className="px-2 py-1 bg-gray-100 rounded">Tags: {mcq.tags}</span>}
-                    </div>
-                  )}
-                </div>
-              ))}
+            <div className="overflow-x-auto">
+              <table className="min-w-full border border-gray-300">
+                <thead>
+                  <tr className="bg-gray-100">
+                    {EXPECTED_HEADERS.map((header, i) => (
+                      <th
+                        key={i}
+                        className="border px-4 py-2 text-left text-sm font-semibold text-gray-900"
+                      >
+                        {header}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {mcqData.map((mcq, index) => (
+                    <tr key={index} className="hover:bg-gray-50">
+                      <td className="border px-4 py-2 text-sm text-gray-900 max-w-xs">
+                        <div 
+                          className="truncate" 
+                          title={mcq.question}
+                          dangerouslySetInnerHTML={{ 
+                            __html: mcq.question.replace(/`([^`]+)`/g, '<code class="bg-yellow-100 px-1 py-0.5 rounded text-xs">$1</code>') 
+                          }} 
+                        />
+                      </td>
+                      <td className="border px-4 py-2 text-sm text-gray-900 max-w-xs">
+                        <div 
+                          className="truncate" 
+                          title={mcq.optionA}
+                          dangerouslySetInnerHTML={{ 
+                            __html: mcq.optionA.replace(/`([^`]+)`/g, '<code class="bg-yellow-100 px-1 py-0.5 rounded text-xs">$1</code>') 
+                          }} 
+                        />
+                      </td>
+                      <td className="border px-4 py-2 text-sm text-gray-900 max-w-xs">
+                        <div 
+                          className="truncate" 
+                          title={mcq.optionB}
+                          dangerouslySetInnerHTML={{ 
+                            __html: mcq.optionB.replace(/`([^`]+)`/g, '<code class="bg-yellow-100 px-1 py-0.5 rounded text-xs">$1</code>') 
+                          }} 
+                        />
+                      </td>
+                      <td className="border px-4 py-2 text-sm text-gray-900 max-w-xs">
+                        <div 
+                          className="truncate" 
+                          title={mcq.optionC}
+                          dangerouslySetInnerHTML={{ 
+                            __html: mcq.optionC.replace(/`([^`]+)`/g, '<code class="bg-yellow-100 px-1 py-0.5 rounded text-xs">$1</code>') 
+                          }} 
+                        />
+                      </td>
+                      <td className="border px-4 py-2 text-sm text-gray-900 max-w-xs">
+                        <div 
+                          className="truncate" 
+                          title={mcq.optionD}
+                          dangerouslySetInnerHTML={{ 
+                            __html: mcq.optionD.replace(/`([^`]+)`/g, '<code class="bg-yellow-100 px-1 py-0.5 rounded text-xs">$1</code>') 
+                          }} 
+                        />
+                      </td>
+                      <td className="border px-4 py-2 text-sm text-gray-900">
+                        <span 
+                          dangerouslySetInnerHTML={{ 
+                            __html: mcq.correctAnswer.replace(/`([^`]+)`/g, '<code class="bg-yellow-100 px-1 py-0.5 rounded text-xs">$1</code>') 
+                          }} 
+                        />
+                      </td>
+                      <td className="border px-4 py-2 text-sm text-gray-900 max-w-xs">
+                        <div 
+                          className="truncate" 
+                          title={mcq.rationale}
+                          dangerouslySetInnerHTML={{ 
+                            __html: mcq.rationale.replace(/`([^`]+)`/g, '<code class="bg-yellow-100 px-1 py-0.5 rounded text-xs">$1</code>') 
+                          }} 
+                        />
+                      </td>
+                      <td className="border px-4 py-2 text-sm text-gray-900">
+                        {mcq.slug}
+                      </td>
+                      <td className="border px-4 py-2 text-sm text-gray-900">
+                        {mcq.tags}
+                      </td>
+                      <td className="border px-4 py-2 text-sm text-gray-900 text-center">
+                        {mcq.difficulty}
+                      </td>
+                      <td className="border px-4 py-2 text-sm text-gray-900 text-center">
+                        {mcq.positiveMarks}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
